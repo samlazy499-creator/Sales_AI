@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: salespilot
+      POSTGRES_PASSWORD: salespilot
+      POSTGRES_DB: salespilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - salespilot_pgdata:/var/lib/postgresql/data
+
+volumes:
+  salespilot_pgdata:
