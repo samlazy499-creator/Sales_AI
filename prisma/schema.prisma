@@ -1,0 +1,410 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// ── Identity & Tenancy ────────────────────────────────────────────
+
+model User {
+  id            String       @id @default(cuid())
+  name          String?
+  email         String       @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  image         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  memberships   Membership[]
+  assignedLeads Lead[]       @relation("AssignedEmployee")
+  notes         Note[]
+  accounts      Account[]
+  sessions      Session[]
+
+  @@index([email])
+}
+
+// Required by @auth/prisma-adapter for OAuth (Google) linking.
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Used for both OAuth email verification and password-reset flows.
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Organization {
+  id       String   @id @default(cuid())
+  name     String
+  slug     String   @unique
+  industry Industry
+  phone    String?
+  city     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships     Membership[]
+  leads           Lead[]
+  customers       Customer[]
+  conversations   Conversation[]
+  aiAgent         AIAgent?
+  knowledgeDocs   KnowledgeDocument[]
+  workflows       Workflow[]
+  appointments    Appointment[]
+  analyticsEvents AnalyticsEvent[]
+  subscription    Subscription?
+  invoices        Invoice[]
+  whatsappChannel Channel?
+}
+
+enum Industry {
+  REAL_ESTATE
+  COACHING
+  CLINIC
+  AUTOMOBILE
+  TRAVEL
+  INSURANCE
+  OTHER
+}
+
+model Membership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           Role
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+enum Role {
+  OWNER
+  SALES_MANAGER
+  SALES_EMPLOYEE
+}
+
+// ── Billing ───────────────────────────────────────────────────────
+
+model Subscription {
+  id               String       @id @default(cuid())
+  organizationId   String       @unique
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan             Plan
+  status           SubStatus
+  razorpaySubId    String?      @unique
+  currentPeriodEnd DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+}
+
+enum Plan {
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum SubStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+model Invoice {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  razorpayInvoiceId String?
+  amount            Int
+  status            String
+  issuedAt          DateTime     @default(now())
+
+  @@index([organizationId])
+}
+
+// ── CRM ───────────────────────────────────────────────────────────
+
+model Lead {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId     String?
+  customer       Customer?    @relation(fields: [customerId], references: [id])
+
+  name         String
+  phone        String
+  email        String?
+  source       LeadSource
+  budget       String?
+  location     String?
+  requirement  String?
+  timeline     String?
+  status       LeadStatus @default(NEW)
+  score        LeadScore  @default(COLD)
+  assignedToId String?
+  assignedTo   User?      @relation("AssignedEmployee", fields: [assignedToId], references: [id])
+
+  notes        Note[]
+  appointments Appointment[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([organizationId, status])
+  @@index([organizationId, score])
+}
+
+enum LeadSource {
+  WHATSAPP
+  WEBSITE
+  MANUAL
+  REFERRAL
+  ADS
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  MEETING_SCHEDULED
+  WON
+  LOST
+}
+
+enum LeadScore {
+  HOT
+  WARM
+  COLD
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  authorId  String?
+  author    User?    @relation(fields: [authorId], references: [id])
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([leadId])
+}
+
+model Customer {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String?
+  phone          String
+  email          String?
+  leads          Lead[]
+  conversations  Conversation[]
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, phone])
+}
+
+// ── Messaging ─────────────────────────────────────────────────────
+
+model Channel {
+  id                    String       @id @default(cuid())
+  organizationId        String       @unique
+  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  whatsappPhoneNumberId String?
+  whatsappWabaId        String?
+  accessTokenRef        String?
+  status                String       @default("PENDING")
+}
+
+model Conversation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId     String
+  customer       Customer     @relation(fields: [customerId], references: [id])
+  assignedToId   String?
+  mode           ConvMode     @default(AI)
+  messages       Message[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, updatedAt])
+}
+
+enum ConvMode {
+  AI
+  HUMAN
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         SenderType
+  content        String
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+enum SenderType {
+  CUSTOMER
+  AI
+  EMPLOYEE
+}
+
+// ── AI Agent & Knowledge Base ────────────────────────────────────
+
+model AIAgent {
+  id             String       @id @default(cuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String       @default("SalesPilot AI")
+  personaPrompt  String       @db.Text
+  temperature    Float        @default(0.4)
+  model          String       @default("gpt-4o")
+  isActive       Boolean      @default(true)
+  updatedAt      DateTime     @updatedAt
+}
+
+model KnowledgeDocument {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title          String
+  sourceType     SourceType
+  sourceUrl      String?
+  storageKey     String?
+  status         DocStatus    @default(PENDING)
+  chunks         Embedding[]
+  createdAt      DateTime     @default(now())
+}
+
+enum SourceType {
+  PDF
+  DOCX
+  URL
+  IMAGE
+  TEXT
+}
+
+enum DocStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+model Embedding {
+  id         String            @id @default(cuid())
+  documentId String
+  document   KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  chunkText  String            @db.Text
+  vector     Unsupported("vector(1536)")
+  createdAt  DateTime          @default(now())
+
+  @@index([documentId])
+}
+
+// ── Automation ────────────────────────────────────────────────────
+
+model Workflow {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  trigger        String
+  definition     Json
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+
+  runs WorkflowRun[]
+}
+
+// Tracks in-progress executions of a Workflow so a WAIT step can resume
+// later without needing a long-lived background process — a Vercel Cron
+// job (see /api/cron/run-followups) polls for rows where runAt <= now()
+// and continues execution from `nextStepIndex`.
+model WorkflowRun {
+  id             String       @id @default(cuid())
+  organizationId String
+  workflowId     String
+  workflow       Workflow     @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  leadId         String
+  nextStepIndex  Int
+  runAt          DateTime
+  status         RunStatus    @default(PENDING)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([status, runAt])
+  @@index([organizationId])
+}
+
+enum RunStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+model Appointment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leadId         String
+  lead           Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  scheduledAt    DateTime
+  status         String       @default("SCHEDULED")
+  notes          String?
+  createdAt      DateTime     @default(now())
+}
+
+// ── Analytics ─────────────────────────────────────────────────────
+
+model AnalyticsEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  type           String
+  payload        Json?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, type, createdAt])
+}
